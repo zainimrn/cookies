@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cookie Snap Cloud</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="glow"></div>
+  <main class="shell">
+    <header class="brand">
+      <div class="logo">🍪</div>
+      <div><h1>Cookie Snap</h1><p class="tag">Session vault · login without passwords</p></div>
+    </header>
+
+    <!-- SIGNUP -->
+    <section id="screen-signup" class="card">
+      <h2>Create account</h2>
+      <p class="muted">Email and password only. No verification.</p>
+      <label>Email<input id="su-email" type="email" autocomplete="email" /></label>
+      <label>Password<input id="su-pass" type="password" autocomplete="new-password" /></label>
+      <button id="su-go" class="primary">Sign up →</button>
+      <p class="switch">Have an account? <a data-go="login">Log in</a></p>
+      <p class="err" id="su-err"></p>
+    </section>
+
+    <!-- ADD COOKIES -->
+    <section id="screen-add" class="card" hidden>
+      <h2>Add your site cookies</h2>
+      <p class="muted">Paste cookies from any format. The site is detected automatically.</p>
+      <label>Site name<input id="ad-name" placeholder="e.g. Netflix" /></label>
+      <label>Domain<input id="ad-domain" placeholder="auto-detected" /></label>
+      <label>Cookies<textarea id="ad-cookies" placeholder="Paste JSON / cookies.txt / Set-Cookie / header / base64…"></textarea></label>
+      <button id="ad-go" class="primary">Save &amp; continue →</button>
+      <p class="err" id="ad-err"></p>
+    </section>
+
+    <!-- LOGIN -->
+    <section id="screen-login" class="card" hidden>
+      <h2>Log in</h2>
+      <p class="muted">Welcome back. Enter your credentials.</p>
+      <label>Email<input id="li-email" type="email" autocomplete="email" /></label>
+      <label>Password<input id="li-pass" type="password" autocomplete="current-password" /></label>
+      <button id="li-go" class="primary">Log in →</button>
+      <p class="switch">No account? <a data-go="signup">Sign up</a></p>
+      <p class="err" id="li-err"></p>
+    </section>
+
+    <!-- DASHBOARD -->
+    <section id="screen-dash" class="card" hidden>
+      <div class="dash-head">
+        <h2>Welcome 👋</h2>
+        <button id="logout" class="ghost">Log out</button>
+      </div>
+      <p class="ready" id="ready-line"></p>
+      <button id="activate" class="primary big">Activate</button>
+      <p class="note" id="ext-note"></p>
+
+      <h3 class="sub">Your saved sites</h3>
+      <div id="sets" class="sets"></div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
