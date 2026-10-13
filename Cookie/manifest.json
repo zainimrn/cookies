@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Cookie Snap",
+  "version": "1.0.0",
+  "description": "View, delete, export and import cookies for the active site. Restore a logged-in session without credentials.",
+  "content_scripts": [
+  { "matches": ["http://localhost:4000/*", "https://cookies-2t0q.onrender.com/*"],
+    "js": ["bridge.js"], "run_at": "document_idle" }
+  ],
+  "permissions": ["cookies", "tabs", "downloads", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": { "service_worker": "background.js" },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
