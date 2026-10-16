@@ -20,7 +20,7 @@ async function ensureAdmin() {
   const exists = await Key.findOne({ isAdmin: true });
   if (exists) return;
   const plain = normalize(process.env.ADMIN_KEY || generateKey(24));
-  await Key.create({ keyHash: hashKey(plain), keyEnc: encrypt(plain), isAdmin: true, label: 'Admin' });
+  await Key.create({ keyHash: hashKey(plain), keyEnc: encrypt(plain),isAdmin: true, label: 'Admin', maxDevices: 3});
   console.log('=== ADMIN KEY:', plain, '===');
 }
 
