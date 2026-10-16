@@ -1,32 +1,37 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import auth from '../middleware/auth.js';
+import Key from '../models/Key.js';
+import { hashKey, decrypt } from '../lib/crypto.js';
 
 const r = Router();
-const sign = (u) =>
-  jwt.sign({ id: u._id, email: u.email }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
-r.post('/signup', async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+r.post('/key', async (req, res) => {
+  const raw = req.body?.key;
+  if (!raw) return res.status(400).json({ error: 'Key required' });
 
-  const exists = await User.findOne({ email: email.toLowerCase() });
-  if (exists) return res.status(409).json({ error: 'Email already registered' });
+  const doc = await Key.findOne({ keyHash: hashKey(raw) });
+  if (!doc || !doc.active) return res.status(401).json({ error: 'Invalid or inactive key' });
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  const user = await User.create({ email: email.toLowerCase(), passwordHash });
-  res.json({ token: sign(user), email: user.email });
+  doc.hits += 1;
+  doc.lastUsedAt = new Date();
+  await doc.save();
+
+  const token = jwt.sign({ kid: doc._id, isAdmin: doc.isAdmin }, process.env.JWT_SECRET, { expiresIn: '30d' });
+  res.json({
+    token,
+    isAdmin: doc.isAdmin,
+    set: doc.isAdmin ? null : { siteName: doc.siteName, domain: doc.domain, cookies: doc.cookies }
+  });
 });
 
-r.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  const user = await User.findOne({ email: (email || '').toLowerCase() });
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-  const ok = await bcrypt.compare(password || '', user.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-  res.json({ token: sign(user), email: user.email });
+r.get('/me', auth, async (req, res) => {
+  const doc = await Key.findById(req.claims.kid);
+  if (!doc) return res.status(404).json({ error: 'Key removed' });
+  res.json({
+    isAdmin: doc.isAdmin,
+    set: doc.isAdmin ? null : { siteName: doc.siteName, domain: doc.domain, cookies: doc.cookies }
+  });
 });
 
 export default r;
