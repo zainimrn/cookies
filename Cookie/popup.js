@@ -4,26 +4,18 @@ const API = 'https://cookies-2t0q.onrender.com';   // ← your Render URL
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]));
 
-let S = null;               // { token, isAdmin, sets, expiresAt }
-let deviceId = '';
-let activeSet = null;
-let allKeys = [];
-let editId = null;
-let draftSites = [];
+let S = null, deviceId = '', activeSet = null, allKeys = [], editId = null, draftSites = [];
 
-/* ---------- ui ---------- */
 const screens = {};
 ['key', 'user', 'admin'].forEach((n) => (screens[n] = $('screen-' + n)));
-function show(n) { for (const k in screens) screens[k].hidden = k !== n; }
-function loading(on) { $('loader').hidden = !on; }
+const show = (n) => { for (const k in screens) screens[k].hidden = k !== n; };
+const loading = (on) => ($('loader').hidden = !on);
 function toast(msg, type = 'ok') {
   const t = $('toast');
   t.textContent = msg; t.className = 'toast' + (type === 'err' ? ' err' : '');
-  t.hidden = false;
-  clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 2600);
+  t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 2800);
 }
 
-/* ---------- state ---------- */
 const loadState = async () => { S = (await chrome.storage.local.get('cs')).cs || null; };
 const saveState = async () => { await chrome.storage.local.set({ cs: S }); };
 const clearState = async () => { S = null; await chrome.storage.local.remove('cs'); };
@@ -49,20 +41,19 @@ async function boot() {
   await ensureDevice();
   await loadState();
   if (!S?.token) return show('key');
-
   loading(true);
   try {
     const me = await api('/auth/me');
-    if (me.expired) { await hardLogout(false); return show('key'); }
-    S.isAdmin = me.isAdmin; S.sets = me.sets; S.expiresAt = me.expiresAt;
+    if (me.expired) { await killLocal(); return show('key'); }
+    if (me.disabled) { await wipeAll(S.sets); await killLocal(); toast('Key disabled by admin', 'err'); return show('key'); }
+    S.isAdmin = me.isAdmin; S.userName = me.userName; S.sets = me.sets; S.expiresAt = me.expiresAt;
     await saveState();
     me.isAdmin ? await openAdmin() : openUser();
-  } catch (e) {
-    await clearState(); show('key'); toast(e.message, 'err');
-  } finally { loading(false); }
+  } catch (e) { await clearState(); show('key'); toast(e.message, 'err'); }
+  finally { loading(false); }
 }
 
-/* ---------- key login ---------- */
+/* ---------- login ---------- */
 $('key-go').onclick = async () => {
   const key = $('key-input').value.trim();
   if (!key) return toast('Enter your key', 'err');
@@ -71,19 +62,23 @@ $('key-go').onclick = async () => {
   try {
     const r = await api('/auth/key', {
       method: 'POST',
-      body: JSON.stringify({ key, deviceId, deviceLabel: navigator.userAgent.slice(0, 60) })
+      body: JSON.stringify({ key, deviceId, deviceLabel: navigator.userAgent.slice(0, 70) })
     });
-    S = { token: r.token, isAdmin: r.isAdmin, sets: r.sets, expiresAt: r.expiresAt };
+    S = { token: r.token, isAdmin: r.isAdmin, userName: r.userName, sets: r.sets, expiresAt: r.expiresAt };
     await saveState();
+    chrome.action.setBadgeText({ text: '' });
     r.isAdmin ? await openAdmin() : openUser();
-  } catch (e) {
-    $('key-err').textContent = e.message; toast(e.message, 'err');
-  } finally { loading(false); }
+  } catch (e) { $('key-err').textContent = e.message; toast(e.message, 'err'); }
+  finally { loading(false); }
 };
 $('key-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('key-go').click(); });
 
 /* ---------- user ---------- */
-function openUser() { renderSiteTabs(); show('user'); }
+function openUser() {
+  $('u-welcome').innerHTML = `Welcome, <b>${esc(S.userName || 'there')}</b> 👋`;
+  renderSiteTabs();
+  show('user');
+}
 
 function renderSiteTabs() {
   const t = $('site-tabs'); t.innerHTML = '';
@@ -91,11 +86,7 @@ function renderSiteTabs() {
     const b = document.createElement('button');
     b.className = 'tab' + (i === 0 ? ' active' : '');
     b.textContent = s.siteName;
-    b.onclick = () => {
-      [...t.children].forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-      selectSet(s);
-    };
+    b.onclick = () => { [...t.children].forEach((x) => x.classList.remove('active')); b.classList.add('active'); selectSet(s); };
     t.appendChild(b);
   });
   if (S.sets?.length) selectSet(S.sets[0]);
@@ -105,7 +96,7 @@ function selectSet(s) {
   activeSet = s;
   $('site-body').innerHTML = `
     <p class="ready">Your <b>${esc(s.siteName)}</b> session is ready.</p>
-    <p class="meta">${esc(s.domain)} · ${s.cookies.length} cookies</p>
+    <p class="meta">${esc(s.domain)} · ${s.cookies.length} active cookies</p>
     <p class="meta">${S.expiresAt ? 'Expires: ' + new Date(S.expiresAt).toLocaleDateString() : 'No expiry set'}</p>
     <button id="u-activate" class="primary big">Activate</button>
     <p class="note" id="u-status"></p>`;
@@ -114,18 +105,15 @@ function selectSet(s) {
 
 $('u-logout').onclick = async () => {
   loading(true);
-  await hardLogout(true);
+  await wipeAll(S?.sets || []);                 // cookies out
+  try { await api('/auth/logout', { method: 'POST' }); } catch {}
+  await killLocal();                            // extension logout (key stays active)
   loading(false);
-  toast('Logged out — key disabled');
+  toast('Logged out — cookies removed');
   show('key');
 };
 
-async function hardLogout(callApi = true) {
-  for (const s of (S?.sets || [])) await wipe(s.domain);
-  if (callApi && S?.token) { try { await api('/auth/logout', { method: 'POST' }); } catch {} }
-  await clearState();
-  chrome.action.setBadgeText({ text: '' });
-}
+async function killLocal() { await clearState(); chrome.action.setBadgeText({ text: '' }); }
 
 /* ---------- activate ---------- */
 const cUrl = (c) => {
@@ -140,6 +128,7 @@ async function wipe(domain) {
   for (const c of list)
     await chrome.cookies.remove({ url: cUrl(c), name: c.name, storeId: c.storeId, partitionKey: c.partitionKey }).catch(() => {});
 }
+async function wipeAll(sets) { for (const s of sets) if (s?.domain) await wipe(s.domain); }
 
 async function activate(set) {
   const now = Math.floor(Date.now() / 1000);
@@ -149,7 +138,7 @@ async function activate(set) {
   await wipe(set.domain);
 
   let ok = 0; const failed = [];
-  for (const c of set.cookies) {
+  for (const c of set.cookies) {          // server already sent only enabled cookies
     if (!c.name) continue;
     const secure = !!c.secure;
     const dom = c.domain || '.' + set.domain;
@@ -164,7 +153,6 @@ async function activate(set) {
     if (c.sameSite && c.sameSite !== 'unspecified') d.sameSite = c.sameSite;
     try { if (await chrome.cookies.set(d)) ok++; else failed.push(c.name); } catch { failed.push(c.name); }
   }
-
   const msg = `Wrote ${ok}/${set.cookies.length}` + (failed.length ? ` · failed: ${failed.join(', ')}` : '');
   $('u-status').textContent = msg;
   toast(msg, failed.length ? 'err' : 'ok');
@@ -192,7 +180,7 @@ async function loadStats() {
   for (const k of allKeys.slice(0, 4)) {
     const el = document.createElement('div');
     el.className = 'item';
-    el.innerHTML = `<div class="top"><b>${esc(k.label)}</b><span class="pill${k.active ? '' : ' off'}">${k.active ? 'active' : 'off'}</span></div>
+    el.innerHTML = `<div class="top"><b>${esc(k.userName || k.label)}</b><span class="pill${k.active ? '' : ' off'}">${k.active ? 'active' : 'off'}</span></div>
       <div class="meta">${k.sets.length} site(s) · ${k.devices.length}/${k.maxDevices} devices</div>`;
     box.appendChild(el);
   }
@@ -201,37 +189,77 @@ async function loadStats() {
 async function loadUsers() { allKeys = await api('/keys'); renderUsers(allKeys); }
 $('u-search').oninput = (e) => {
   const q = e.target.value.toLowerCase();
-  renderUsers(allKeys.filter((k) => (k.label + k.key + k.sets.map((s) => s.siteName + s.domain).join(' ')).toLowerCase().includes(q)));
+  renderUsers(allKeys.filter((k) => (k.userName + k.label + k.key + k.sets.map((s) => s.siteName + s.domain).join(' ')).toLowerCase().includes(q)));
 };
 
 function renderUsers(list) {
   const box = $('users'); box.innerHTML = '';
-  if (!list.length) { box.innerHTML = '<p class="muted">No keys yet.</p>'; return; }
+  if (!list.length) { box.innerHTML = '<p class="muted">No users yet.</p>'; return; }
   for (const k of list) {
     const el = document.createElement('div');
     el.className = 'item';
     el.innerHTML = `
-      <div class="top"><b>${esc(k.label)}</b><span class="pill${k.active ? '' : ' off'}">${k.active ? 'active' : 'off'}</span></div>
+      <div class="top"><b>${esc(k.userName || k.label)}</b><span class="pill${k.active ? '' : ' off'}">${k.active ? 'active' : 'off'}</span></div>
       <div class="meta">key: <code>${esc(k.key)}</code></div>
       <div class="meta">${k.sets.map((s) => esc(s.siteName)).join(', ') || 'no sites'}</div>
       <div class="meta">${k.devices.length}/${k.maxDevices} devices · expires ${k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : 'never'}</div>
       <div class="acts">
         <button class="ghost sm" data-copy>Copy key</button>
+        <button class="ghost sm" data-cookies>Cookies</button>
         <button class="ghost sm" data-edit>Edit</button>
-        <button class="ghost sm" data-dev>Reset devices</button>
+        <button class="ghost sm" data-dev>Reset device</button>
         <button class="ghost sm" data-toggle>${k.active ? 'Disable' : 'Enable'}</button>
         <button class="ghost sm" data-del>Delete</button>
-      </div>`;
+      </div>
+      <div class="subitem" data-panel hidden></div>`;
     el.querySelector('[data-copy]').onclick = () => { navigator.clipboard.writeText(k.key); toast('Key copied'); };
+    el.querySelector('[data-cookies]').onclick = () => toggleCookies(k, el.querySelector('[data-panel]'));
     el.querySelector('[data-edit]').onclick = () => startEdit(k);
-    el.querySelector('[data-dev]').onclick = async () => { await api('/keys/' + k.id + '/reset-devices', { method: 'POST' }); await loadUsers(); toast('Devices reset'); };
-    el.querySelector('[data-toggle]').onclick = async () => { await api('/keys/' + k.id, { method: 'PATCH', body: JSON.stringify({ active: !k.active }) }); await loadUsers(); await loadStats(); };
-    el.querySelector('[data-del]').onclick = async () => { if (confirm('Delete this key?')) { await api('/keys/' + k.id, { method: 'DELETE' }); await loadUsers(); await loadStats(); } };
+    el.querySelector('[data-dev]').onclick = async () => { await api('/keys/' + k.id + '/reset-devices', { method: 'POST' }); await loadUsers(); toast('Device reset'); };
+    el.querySelector('[data-toggle]').onclick = async () => {
+      await api('/keys/' + k.id, { method: 'PATCH', body: JSON.stringify({ active: !k.active }) });
+      await loadUsers(); await loadStats();
+      toast(k.active ? 'Disabled — user will be logged out' : 'Enabled');
+    };
+    el.querySelector('[data-del]').onclick = async () => { if (confirm('Delete this user?')) { await api('/keys/' + k.id, { method: 'DELETE' }); await loadUsers(); await loadStats(); } };
     box.appendChild(el);
   }
 }
 
-/* ---------- add / edit key ---------- */
+async function toggleCookies(k, panel) {
+  if (!panel.hidden) { panel.hidden = true; return; }
+  panel.hidden = false;
+  panel.textContent = 'Loading…';
+  const d = await api('/keys/' + k.id);
+  panel.innerHTML = '';
+  for (const s of d.sets) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<div class="meta"><b>${esc(s.siteName)}</b> · ${esc(s.domain)}</div>`;
+    for (const c of s.cookies) {
+      const row = document.createElement('div');
+      row.className = 'cookierow' + (c.enabled ? '' : ' off');
+      row.innerHTML = `
+        <input type="checkbox" ${c.enabled ? 'checked' : ''} />
+        <span class="cname">${esc(c.name)}</span>
+        <span class="cval">${esc((c.value || '').slice(0, 26))}</span>
+        <button class="ghost sm" data-x>✕</button>`;
+      row.querySelector('input').onchange = async (e) => {
+        await api(`/keys/${k.id}/sets/${s.id}/cookies/${c.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: e.target.checked }) });
+        row.classList.toggle('off', !e.target.checked);
+        toast(e.target.checked ? 'Cookie enabled' : 'Cookie disabled');
+      };
+      row.querySelector('[data-x]').onclick = async () => {
+        await api(`/keys/${k.id}/sets/${s.id}/cookies/${c.id}`, { method: 'DELETE' });
+        toggleCookies(k, { hidden: false }); panel.hidden = true; toggleCookies(k, panel);
+      };
+      wrap.appendChild(row);
+    }
+    panel.appendChild(wrap);
+  }
+  if (!panel.children.length) panel.textContent = 'No cookies.';
+}
+
+/* ---------- add / edit ---------- */
 function siteCard(site, i) {
   const el = document.createElement('div');
   el.className = 'sitecard';
@@ -251,16 +279,14 @@ function siteCard(site, i) {
   el.querySelector('[data-del]').onclick = () => { draftSites.splice(i, 1); renderDraft(); };
   return el;
 }
-function renderDraft() {
-  const box = $('a-sites'); box.innerHTML = '';
-  draftSites.forEach((s, i) => box.appendChild(siteCard(s, i)));
-}
+function renderDraft() { const b = $('a-sites'); b.innerHTML = ''; draftSites.forEach((s, i) => b.appendChild(siteCard(s, i))); }
 $('a-addsite').onclick = () => { draftSites.push({ siteName: '', domain: '', raw: '' }); renderDraft(); };
 $('a-gen').onclick = async () => { const r = await api('/keys/generate', { method: 'POST' }); $('a-key').value = r.key; };
 
 function startEdit(k) {
   editId = k.id;
-  $('add-title').textContent = 'Edit key';
+  $('add-title').textContent = 'Edit user';
+  $('a-user').value = k.userName || '';
   $('a-key').value = k.key;
   $('a-expiry').value = k.expiresAt ? k.expiresAt.slice(0, 10) : '';
   draftSites = k.sets.map((s) => ({ id: s.id, siteName: s.siteName, domain: s.domain, raw: '' }));
@@ -270,11 +296,10 @@ function startEdit(k) {
 }
 $('a-cancel').onclick = () => resetForm();
 function resetForm() {
-  editId = null; draftSites = [];
-  $('add-title').textContent = 'Create key';
-  ['a-key', 'a-expiry'].forEach((id) => ($(id).value = ''));
+  editId = null; draftSites = [{ siteName: '', domain: '', raw: '' }];
+  $('add-title').textContent = 'Create user';
+  ['a-user', 'a-key', 'a-expiry'].forEach((id) => ($(id).value = ''));
   $('a-status').textContent = ''; $('a-cancel').hidden = true;
-  draftSites.push({ siteName: '', domain: '', raw: '' });
   renderDraft();
 }
 
@@ -282,6 +307,7 @@ $('a-save').onclick = async () => {
   $('a-status').textContent = '';
   loading(true);
   try {
+    const userName = $('a-user').value.trim();
     const key = $('a-key').value.trim();
     const expiresAt = $('a-expiry').value || null;
     const sets = draftSites
@@ -290,26 +316,23 @@ $('a-save').onclick = async () => {
         id: s.id, siteName: s.siteName.trim(), domain: s.domain.trim(),
         cookies: s.raw.trim() ? parse(s.raw, detectFormat(s.raw)) : null
       }));
-
     if (!sets.length) throw new Error('Add at least one site');
 
     if (editId) {
-      await api('/keys/' + editId, { method: 'PATCH', body: JSON.stringify({ expiresAt, key: key || undefined }) });
+      await api('/keys/' + editId, { method: 'PATCH', body: JSON.stringify({ userName, expiresAt, key: key || undefined }) });
       for (const s of sets) {
         const body = { siteName: s.siteName, domain: s.domain };
         if (s.cookies) body.cookies = s.cookies;
         if (s.id) await api(`/keys/${editId}/sets/${s.id}`, { method: 'PATCH', body: JSON.stringify(body) });
         else await api(`/keys/${editId}/sets`, { method: 'POST', body: JSON.stringify({ ...body, cookies: s.cookies || [] }) });
       }
-      await loadUsers(); await loadStats();
-      toast('Key updated');
+      toast('User updated');
     } else {
       for (const s of sets) if (!s.cookies) throw new Error(`Paste cookies for ${s.siteName}`);
-      await api('/keys', { method: 'POST', body: JSON.stringify({ key: key || undefined, expiresAt, sets }) });
-      await loadUsers(); await loadStats();
-      toast('Key created');
+      await api('/keys', { method: 'POST', body: JSON.stringify({ userName, key: key || undefined, expiresAt, sets }) });
+      toast('User created');
     }
-    resetForm();
+    await loadUsers(); await loadStats(); resetForm();
   } catch (e) { $('a-status').textContent = e.message; toast(e.message, 'err'); }
   finally { loading(false); }
 };
@@ -329,8 +352,7 @@ $('s-regen').onclick = async () => {
 };
 $('s-export').onclick = () => {
   const blob = new Blob([JSON.stringify(allKeys, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = 'cookie-snap-keys.json'; a.click();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cookie-snap-users.json'; a.click();
 };
 
 /* ---------- domain detection ---------- */

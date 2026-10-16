@@ -6,12 +6,28 @@ import { generateKey, hashKey, encrypt, decrypt, normalize } from '../lib/crypto
 const r = Router();
 r.use(auth, adminOnly);
 
-const shape = (d) => ({
-  id: d._id, key: decrypt(d.keyEnc), label: d.label,
-  sets: d.sets.map((s) => ({ id: s._id, siteName: s.siteName, domain: s.domain, cookieCount: s.cookies.length })),
+const brief = (d) => ({
+  id: d._id, key: decrypt(d.keyEnc), userName: d.userName, label: d.label,
+  sets: d.sets.map((s) => ({
+    id: s._id, siteName: s.siteName, domain: s.domain,
+    cookieCount: s.cookies.length,
+    enabledCount: s.cookies.filter((c) => c.enabled !== false).length
+  })),
   active: d.active, expiresAt: d.expiresAt, hits: d.hits,
   devices: d.devices.map((x) => ({ id: x.id, label: x.label, lastSeen: x.lastSeen })),
   maxDevices: d.maxDevices, createdAt: d.createdAt
+});
+
+const full = (d) => ({
+  ...brief(d),
+  sets: d.sets.map((s) => ({
+    id: s._id, siteName: s.siteName, domain: s.domain,
+    cookies: s.cookies.map((c) => ({
+      id: c._id, name: c.name, value: c.value, domain: c.domain, path: c.path,
+      secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite,
+      expirationDate: c.expirationDate, enabled: c.enabled !== false
+    }))
+  }))
 });
 
 /* ---- admin key ---- */
@@ -28,21 +44,26 @@ r.post('/admin/regenerate', async (_req, res) => {
 });
 r.post('/admin/reset-devices', async (_req, res) => {
   const d = await Key.findOne({ isAdmin: true });
-  d.devices = [];
-  await d.save();
+  d.devices = []; await d.save();
   res.json({ ok: true });
 });
 
 /* ---- keys ---- */
 r.get('/', async (_req, res) => {
   const list = await Key.find({ isAdmin: false }).sort({ createdAt: -1 });
-  res.json(list.map(shape));
+  res.json(list.map(brief));
+});
+
+r.get('/:id', async (req, res) => {
+  const d = await Key.findById(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  res.json(full(d));
 });
 
 r.post('/generate', (_req, res) => res.json({ key: generateKey(20) }));
 
 r.post('/', async (req, res) => {
-  const { key, label, expiresAt, sets } = req.body || {};
+  const { key, label, userName, expiresAt, sets } = req.body || {};
   if (!Array.isArray(sets) || !sets.length) return res.status(400).json({ error: 'At least one site required' });
 
   const plain = key ? normalize(key) : generateKey(20);
@@ -50,12 +71,12 @@ r.post('/', async (req, res) => {
 
   const doc = await Key.create({
     keyHash: hashKey(plain), keyEnc: encrypt(plain),
-    label: label || sets[0].siteName,
+    userName: userName || '', label: label || userName || sets[0].siteName,
     sets: sets.map((s) => ({ siteName: s.siteName, domain: s.domain, cookies: s.cookies || [] })),
     expiresAt: expiresAt ? new Date(expiresAt) : null,
     maxDevices: 1
   });
-  res.json(shape(doc));
+  res.json(brief(doc));
 });
 
 r.post('/:id/sets', async (req, res) => {
@@ -65,7 +86,7 @@ r.post('/:id/sets', async (req, res) => {
   if (!doc) return res.status(404).json({ error: 'Not found' });
   doc.sets.push({ siteName, domain, cookies: cookies || [] });
   await doc.save();
-  res.json(shape(doc));
+  res.json(full(doc));
 });
 
 r.patch('/:id/sets/:setId', async (req, res) => {
@@ -78,7 +99,7 @@ r.patch('/:id/sets/:setId', async (req, res) => {
   if (domain !== undefined) s.domain = domain;
   if (cookies !== undefined) s.cookies = cookies;
   await doc.save();
-  res.json(shape(doc));
+  res.json(full(doc));
 });
 
 r.delete('/:id/sets/:setId', async (req, res) => {
@@ -86,14 +107,42 @@ r.delete('/:id/sets/:setId', async (req, res) => {
   if (!doc) return res.status(404).json({ error: 'Not found' });
   doc.sets.pull(req.params.setId);
   await doc.save();
-  res.json(shape(doc));
+  res.json(full(doc));
 });
 
+/* ---- single cookie control ---- */
+r.patch('/:id/sets/:setId/cookies/:cookieId', async (req, res) => {
+  const doc = await Key.findById(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Not found' });
+  const s = doc.sets.id(req.params.setId);
+  if (!s) return res.status(404).json({ error: 'Site not found' });
+  const c = s.cookies.id(req.params.cookieId);
+  if (!c) return res.status(404).json({ error: 'Cookie not found' });
+  const { enabled, value, name } = req.body || {};
+  if (enabled !== undefined) c.enabled = enabled;
+  if (value !== undefined) c.value = value;
+  if (name !== undefined) c.name = name;
+  await doc.save();
+  res.json(full(doc));
+});
+
+r.delete('/:id/sets/:setId/cookies/:cookieId', async (req, res) => {
+  const doc = await Key.findById(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Not found' });
+  const s = doc.sets.id(req.params.setId);
+  if (!s) return res.status(404).json({ error: 'Site not found' });
+  s.cookies.pull(req.params.cookieId);
+  await doc.save();
+  res.json(full(doc));
+});
+
+/* ---- key level ---- */
 r.patch('/:id', async (req, res) => {
   const doc = await Key.findById(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Not found' });
-  const { label, active, expiresAt, key, maxDevices } = req.body || {};
+  const { label, userName, active, expiresAt, key, maxDevices } = req.body || {};
   if (label !== undefined) doc.label = label;
+  if (userName !== undefined) doc.userName = userName;
   if (active !== undefined) doc.active = active;
   if (expiresAt !== undefined) doc.expiresAt = expiresAt ? new Date(expiresAt) : null;
   if (maxDevices !== undefined) doc.maxDevices = maxDevices;
@@ -104,15 +153,14 @@ r.patch('/:id', async (req, res) => {
     doc.keyHash = hashKey(plain); doc.keyEnc = encrypt(plain);
   }
   await doc.save();
-  res.json(shape(doc));
+  res.json(brief(doc));
 });
 
 r.post('/:id/reset-devices', async (req, res) => {
   const doc = await Key.findById(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Not found' });
-  doc.devices = [];
-  await doc.save();
-  res.json(shape(doc));
+  doc.devices = []; await doc.save();
+  res.json(brief(doc));
 });
 
 r.delete('/:id', async (req, res) => {

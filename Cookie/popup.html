@@ -5,16 +5,14 @@
   <div id="loader" class="loader" hidden><div class="spin"></div></div>
   <div id="toast" class="toast" hidden></div>
 
-  <!-- KEY -->
-  <section id="screen-key" class="screen">
-    <div class="hero">
-      <div class="logo">🔑</div>
-      <h1>Cookie Snap</h1>
-      <p class="muted">Enter your access key</p>
-    </div>
-    <div class="pad">
-      <input id="key-input" placeholder="YOUR-ACCESS-KEY" spellcheck="false" autocomplete="off" />
-      <button id="key-go" class="primary">Continue</button>
+  <!-- KEY LOGIN -->
+  <section id="screen-key" class="screen keywrap">
+    <div class="keycard">
+      <div class="keyicon">🔑</div>
+      <h1>Enter your key</h1>
+      <label class="klabel">KEY</label>
+      <input id="key-input" placeholder="Paste your key" spellcheck="false" autocomplete="off" />
+      <button id="key-go" class="grad">Continue</button>
       <p class="err" id="key-err"></p>
     </div>
   </section>
@@ -25,6 +23,9 @@
       <div class="brand"><span class="dot ok"></span>Cookie Snap</div>
       <button id="u-logout" class="ghost sm">Log out</button>
     </header>
+    <div class="pad">
+      <h2 id="u-welcome"></h2>
+    </div>
     <div class="tabs" id="site-tabs"></div>
     <div class="pad" id="site-body"></div>
   </section>
@@ -34,7 +35,7 @@
     <aside class="side">
       <div class="side-brand"><span class="dot ok"></span>Admin</div>
       <button class="tab active" data-tab="dash">Dashboard</button>
-      <button class="tab" data-tab="add">Add Cookies</button>
+      <button class="tab" data-tab="add">Add User</button>
       <button class="tab" data-tab="users">Users</button>
       <button class="tab" data-tab="settings">Settings</button>
       <div class="spacer"></div>
@@ -54,8 +55,9 @@
       </div>
 
       <div class="pane" id="pane-add" hidden>
-        <h2 id="add-title">Create key</h2>
+        <h2 id="add-title">Create user</h2>
         <p class="muted">One key can hold many sites.</p>
+        <label>User name<input id="a-user" placeholder="e.g. Zain" /></label>
         <label>Key</label>
         <div class="row">
           <input id="a-key" placeholder="auto-generate" spellcheck="false" />
@@ -64,7 +66,7 @@
         <label>End date (optional)<input id="a-expiry" type="date" /></label>
         <div id="a-sites"></div>
         <button id="a-addsite" class="ghost">+ Add another site</button>
-        <button id="a-save" class="primary">Save key</button>
+        <button id="a-save" class="grad">Save</button>
         <button id="a-cancel" class="ghost" hidden>Cancel edit</button>
         <p class="err" id="a-status"></p>
       </div>

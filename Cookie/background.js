@@ -6,23 +6,37 @@ chrome.runtime.onStartup.addListener(schedule);
 schedule();
 
 function schedule() {
-  chrome.alarms.create('expiry-check', { periodInMinutes: 20 });
-  check();
+  chrome.alarms.create('watch', { periodInMinutes: 1 });
+  watch();
 }
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'expiry-check') check(); });
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'watch') watch(); });
 
-async function check() {
+async function watch() {
   const { cs } = await chrome.storage.local.get('cs');
-  if (!cs?.expiresAt) return;
-  if (Date.now() < new Date(cs.expiresAt).getTime()) return;
+  if (!cs?.token) return;
 
-  for (const s of (cs.sets || [])) await wipe(s.domain);
+  // local expiry
+  if (cs.expiresAt && Date.now() > new Date(cs.expiresAt).getTime()) return kill(cs, 'Expired');
+
   try {
-    await fetch(API + '/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + cs.token } });
+    const res = await fetch(API + '/api/auth/me', { headers: { Authorization: 'Bearer ' + cs.token } });
+    if (res.status === 401) return kill(cs, 'Unbound');
+    const me = await res.json();
+    if (me.expired) return kill(cs, 'Expired');
+    if (me.disabled) return kill(cs, 'Disabled by admin');
   } catch {}
+}
+
+async function kill(cs, reason) {
+  for (const s of (cs.sets || [])) if (s?.domain) await wipe(s.domain);
+  try { await fetch(API + '/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + cs.token } }); } catch {}
   await chrome.storage.local.remove('cs');
   chrome.action.setBadgeText({ text: '!' });
-  chrome.action.setBadgeBackgroundColor({ color: '#ff6b6b' });
+  chrome.action.setBadgeBackgroundColor({ color: '#f87171' });
+  chrome.notifications?.create?.({
+    notificationId: 'cs-' + Date.now(),
+    options: { type: 'basic', iconUrl: 'icons/icon128.png', title: 'Cookie Snap', message: reason + ' — cookies removed, logged out.' }
+  });
 }
 
 function urlOf(c) {
